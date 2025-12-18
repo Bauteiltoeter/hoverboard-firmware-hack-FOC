@@ -187,8 +187,8 @@ static uint32_t commandR_len = sizeof(commandR);
 #endif
 
 #if defined(SUPPORT_BUTTONS) || defined(SUPPORT_BUTTONS_LEFT) || defined(SUPPORT_BUTTONS_RIGHT)
-static uint8_t button1;                 // Blue
-static uint8_t button2;                 // Green
+uint8_t button1;                 // Blue
+uint8_t button2;                 // Green
 #endif
 
 #ifdef VARIANT_HOVERCAR
@@ -829,23 +829,23 @@ void calcInputCmd(InputStruct *in, int16_t out_min, int16_t out_max) {
  */
 void readInputRaw(void) {
     #ifdef CONTROL_ADC
-    if (inIdx == CONTROL_ADC) {
+  //  if (inIdx == CONTROL_ADC) {
       #ifdef ADC_ALTERNATE_CONNECT
         input1[inIdx].raw = adc_buffer.l_rx2;
         input2[inIdx].raw = adc_buffer.l_tx2;
       #else
-        input1[inIdx].raw = adc_buffer.l_tx2;
-        input2[inIdx].raw = adc_buffer.l_rx2;
+        input1[0].raw = adc_buffer.l_tx2;
+        input2[0].raw = adc_buffer.l_rx2;
       #endif
-    }
+  //  }
     #endif
 
     #if defined(CONTROL_NUNCHUK) || defined(SUPPORT_NUNCHUK)
     if (Nunchuk_Read() == NUNCHUK_CONNECTED) {
-      if (inIdx == CONTROL_NUNCHUK) {
-        input1[inIdx].raw = (nunchuk_data[0] - 127) * 8; // X axis 0-255
-        input2[inIdx].raw = (nunchuk_data[1] - 128) * 8; // Y axis 0-255
-      }
+      //if (inIdx == CONTROL_NUNCHUK) {
+        input1[1].raw = (nunchuk_data[0] - 127) * 8; // X axis 0-255
+        input2[1].raw = (nunchuk_data[1] - 128) * 8; // Y axis 0-255
+     // }
       #ifdef SUPPORT_BUTTONS
         button1 = (uint8_t)nunchuk_data[5] & 1;
         button2 = (uint8_t)(nunchuk_data[5] >> 1) & 1;
@@ -1659,7 +1659,7 @@ void filtLowPass32(int32_t u, uint16_t coef, int32_t *y) {
   * Outputs:      y     = fixdt(1,16,4)
   * Parameters:   rate  = fixdt(1,16,4) = [0, 32767] Do NOT make rate negative (>32767)
   */
-void rateLimiter16(int16_t u, int16_t rate, int16_t *y) {
+void rateLimiter16(int16_t u, int16_t rate, int16_t *y, int16_t negRate) {
   int16_t q0;
   int16_t q1;
 
@@ -1668,7 +1668,7 @@ void rateLimiter16(int16_t u, int16_t rate, int16_t *y) {
   if (q0 > rate) {
     q0 = rate;
   } else {
-    q1 = -rate;
+    q1 = -negRate;
     if (q0 < q1) {
       q0 = q1;
     }
@@ -1690,6 +1690,17 @@ void mixerFcn(int16_t rtu_speed, int16_t rtu_steer, int16_t *rty_speedR, int16_t
 
     prodSpeed   = (int16_t)((rtu_speed * (int16_t)SPEED_COEFFICIENT) >> 14);
     prodSteer   = (int16_t)((rtu_steer * (int16_t)STEER_COEFFICIENT) >> 14);
+
+
+    if ( prodSpeed > 200 || prodSpeed < -200)
+    {
+      prodSteer = prodSteer * (1-(1/32767)*prodSpeed);
+    }
+    else
+    {
+      prodSpeed = 0;  
+    }
+
 
     tmp         = prodSpeed - prodSteer;  
     tmp         = CLAMP(tmp, -32768, 32767);  // Overflow protection

@@ -84,6 +84,11 @@ extern uint8_t enable;                  // global variable for motor enable
 
 extern int16_t batVoltage;              // global variable for battery voltage
 
+extern uint8_t ctrlModReqRaw;
+extern uint8_t button1;                 // Blue
+extern uint8_t button2;                 // Green
+
+
 #if defined(SIDEBOARD_SERIAL_USART2)
 extern SerialSideboard Sideboard_L;
 #endif
@@ -147,16 +152,18 @@ static uint8_t sideboard_leds_R;
   static int      distanceErr;  
   static int      lastDistance = 0;
   static uint16_t transpotter_counter = 0;
+  static int      isInDriveMode = 0;
+  static uint32_t notInDriveSince = 0; 
 #endif
 
 static int16_t    speed;                // local variable for speed. -1000 to 1000
-#ifndef VARIANT_TRANSPOTTER
+
   static int16_t  steer;                // local variable for steering. -1000 to 1000
   static int16_t  steerRateFixdt;       // local fixed-point variable for steering rate limiter
   static int16_t  speedRateFixdt;       // local fixed-point variable for speed rate limiter
   static int32_t  steerFixdt;           // local fixed-point variable for steering low-pass filter
   static int32_t  speedFixdt;           // local fixed-point variable for speed low-pass filter
-#endif
+
 
 static uint32_t    buzzerTimer_prev = 0;
 static uint32_t    inactivity_timeout_counter;
@@ -248,11 +255,40 @@ int main(void) {
     }
   #endif
 
+  uint8_t breakEnabled = 0;
+  uint8_t slowMode = 1;
+
+
   while(1) {
     if (buzzerTimer - buzzerTimer_prev > 16*DELAY_IN_MAIN_LOOP) {   // 1 ms = 16 ticks buzzerTimer
 
     readCommand();                        // Read Command: input1[inIdx].cmd, input2[inIdx].cmd
     calcAvgSpeed();                       // Calculate average measured speed: speedAvg, speedAvgAbs
+
+    //poweroff();
+    // if ( i< 1600)
+    // {
+    //   if ( speed < 300)
+    //   {
+    //     speed=speed+5;
+    //   }
+      
+
+    //   pwml = -speed;
+    //   pwmr = speed;
+      
+    // }
+    // else
+    // {
+    //   pwml = 0;
+    //   pwmr = 0;
+    // }
+    // enable = 1;
+    // timeoutFlgGen = 0;
+    // timeoutCntGen = 0;
+    // i++;
+
+
 
     #ifndef VARIANT_TRANSPOTTER
       // ####### MOTOR ENABLING: Only if the initial input is very small (for SAFETY) #######
@@ -365,16 +401,45 @@ int main(void) {
     #endif
 
     #ifdef VARIANT_TRANSPOTTER
-      distance    = CLAMP(input1[inIdx].cmd - 180, 0, 4095);
-      steering    = (input2[inIdx].cmd - 2048) / 2048.0;
-      distanceErr = distance - (int)(setDistance * 1345);
-
       if (nunchuk_connected == 0) {
-        cmdL = cmdL * 0.8f + (CLAMP(distanceErr + (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P), -850, 850) * -0.2f);
-        cmdR = cmdR * 0.8f + (CLAMP(distanceErr - (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P), -850, 850) * -0.2f);
+        
+        distance    = CLAMP(input1[0].cmd - 180, 0, 4095);
+        steering    = (input2[0].cmd - 2048) / 2048.0;
+        distanceErr = distance - (int)(setDistance * 1345);
+
+        steering = -steering;
+
+        ctrlModReqRaw         = VLT_MODE;
+        rtP_Left.b_cruiseCtrlEna  = 0;
+        rtP_Right.b_cruiseCtrlEna = 0;
+        if (distanceErr > 0)
+        {
+          cmdL = cmdL * 0.7f + (CLAMP(distanceErr + (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P), -850, 850) * -0.2f);
+          cmdR = cmdR * 0.7f + (CLAMP(distanceErr - (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P), -850, 850) * -0.2f);
+        }
+        else
+        {
+          cmdL = cmdL * 0.7f + (CLAMP(distanceErr + (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P_REV), -850, 850) * -0.2f);
+          cmdR = cmdR * 0.7f + (CLAMP(distanceErr - (steering*((float)MAX(ABS(distanceErr), 50)) * ROT_P_REV), -850, 850) * -0.2f);
+        }
+        
         if (distanceErr > 0) {
           enable = 1;
+          
         }
+
+        if (cmdL > 0 && cmdR > 0 && !isInDriveMode)
+        {
+          cmdL = 0;
+          cmdR = 0;
+          
+        }
+        else
+        {
+          isInDriveMode = 1;
+        }
+
+
         if (distanceErr > -300) {
           #ifdef INVERT_R_DIRECTION
             pwmr = cmdR;
@@ -387,19 +452,167 @@ int main(void) {
             pwml = cmdL;
           #endif
 
-          if (checkRemote) {
-            if (!HAL_GPIO_ReadPin(LED_PORT, LED_PIN)) {
-              //enable = 1;
-            } else {
-              enable = 0;
-            }
-          }
+          // if (checkRemote) {
+          //   if (!HAL_GPIO_ReadPin(LED_PORT, LED_PIN)) {
+          //     //enable = 1;
+          //   } else {
+          //     enable = 0;
+          //   }
+          // }
         } else {
-          enable = 0;
+          //enable = 0;
+          
+          pwml = 0;
+          pwmr = 0;
+          if(isInDriveMode)
+            notInDriveSince = main_loop_counter;
+          isInDriveMode = 0;
         }
         timeoutCntGen = 0;
         timeoutFlgGen = 0;
+        if (!isInDriveMode && (main_loop_counter - notInDriveSince) > 1000)
+        {
+          enable = 0;
+          
+        }
+
       }
+      else
+      {
+        enable = 1;
+        timeoutCntGen = 0;
+        timeoutFlgGen = 0;
+        rtP_Left.b_cruiseCtrlEna  = 0;
+        rtP_Right.b_cruiseCtrlEna = 0;
+        if(!breakEnabled)
+        {
+
+          if(slowMode && (rtY_Right.n_mot > 5 || rtY_Right.n_mot < -5) && (rtY_Left.n_mot > 5 && rtY_Left.n_mot < -5))
+            ctrlModReqRaw         = SPD_MODE;
+          else
+            ctrlModReqRaw = VLT_MODE;
+
+          if(slowMode)
+          {
+            rateLimiter16(input1[1].raw, rate, &steerRateFixdt, rate);
+            rateLimiter16(input2[1].raw, rate, &speedRateFixdt, rate);
+          }
+          else
+          {
+            uint8_t isDrivingBackwards = 0;
+            if (rtY_Right.n_mot > 0 && rtY_Left.n_mot < 0)
+            {
+              isDrivingBackwards = 1;
+            }
+
+            if(isDrivingBackwards)
+            {
+              rateLimiter16(input2[1].raw, rate>>1, &speedRateFixdt, rate);
+              rateLimiter16(input1[1].raw, rate>>2, &steerRateFixdt, rate>>1);
+            }
+            else
+            {
+              rateLimiter16(input1[1].raw, rate>>1, &steerRateFixdt, rate>>2);
+              rateLimiter16(input2[1].raw, rate, &speedRateFixdt, rate>>1);
+            }
+          }
+          filtLowPass32(steerRateFixdt >> 4, FILTER, &steerFixdt);
+          filtLowPass32(speedRateFixdt >> 4, FILTER, &speedFixdt);
+          steer = -(int16_t)(steerFixdt >> 16);  // convert fixed-point to integer
+          //steer = steer * 0.5;
+          speed = (int16_t)(speedFixdt >> 16);  // convert fixed-point to integer
+
+          
+
+        //steer = input1[1].raw;
+        //speed = input2[1].raw;
+          //speed = speed;
+
+
+          if(slowMode)
+          {
+            steer = steer / 4;
+            speed = speed / 2;
+          }
+
+          mixerFcn(speed << 4, steer << 4, &cmdR, &cmdL);   // This function implements the equations above
+
+          if(cmdR < 7 && cmdR > -7)
+          {
+            cmdR = 0;
+          }
+
+          if(cmdL < 7 && cmdL > -7)
+          {
+            cmdL = 0;
+          }
+        }
+        else
+        {
+          rtP_Left.n_cruiseMotTgt   = 0;
+          rtP_Right.n_cruiseMotTgt  = 0;
+          rtP_Left.b_cruiseCtrlEna  = 1;
+          rtP_Right.b_cruiseCtrlEna = 1;
+
+          // clear filters
+          rateLimiter16(0, rate, &steerRateFixdt, rate);
+          rateLimiter16(0, rate, &speedRateFixdt, rate);
+          filtLowPass32(steerRateFixdt >> 4, FILTER, &steerFixdt);
+          filtLowPass32(speedRateFixdt >> 4, FILTER, &speedFixdt);
+        }
+
+         static uint8_t button1Old;
+         if (!button1 && button1Old != button1)
+         {
+          if(breakEnabled)
+          {
+            beepShort(10);
+            breakEnabled = 0;
+          }
+          else
+          {
+            beepLong(10);
+            breakEnabled = 1;
+          }
+         }
+         button1Old = button1;
+
+         static uint8_t button2Old;
+
+         if (!button2 && button2Old != button2)
+         {
+          if(slowMode)
+          {
+            beepShort(5);
+            slowMode = 0;
+          }
+          else
+          {
+            beepLong(5);
+            slowMode = 1;
+          }
+         }
+         button2Old = button2;
+
+        //         
+
+
+
+         #ifdef INVERT_R_DIRECTION
+            pwmr = -cmdR;
+          #else
+            pwmr = cmdR;
+          #endif
+          #ifdef INVERT_L_DIRECTION
+            pwml =cmdL;
+          #else
+            pwml = -cmdL;
+          #endif
+          
+      }
+
+
+
 
       if (timeoutFlgGen) {
         pwml = 0;
@@ -414,30 +627,34 @@ int main(void) {
         nunchuk_connected = 0;
       }
 
-      if ((distance / 1345.0) - setDistance > 0.5 && (lastDistance / 1345.0) - setDistance > 0.5) { // Error, robot too far away!
-        enable = 0;
-        beepLong(5);
-        #ifdef SUPPORT_LCD
-          LCD_ClearDisplay(&lcd);
-          HAL_Delay(5);
-          LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Emergency Off!");
-          LCD_SetLocation(&lcd, 0, 1); LCD_WriteString(&lcd, "Keeper too fast.");
-        #endif
-        poweroff();
+      if(nunchuk_connected==0)
+      {
+        if ((distance / 1345.0) - setDistance > 0.5 && (lastDistance / 1345.0) - setDistance > 0.5) { // Error, robot too far away!
+          enable = 0;
+          beepLong(5);
+          #ifdef SUPPORT_LCD
+            LCD_ClearDisplay(&lcd);
+            HAL_Delay(5);
+            LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Emergency Off!");
+            LCD_SetLocation(&lcd, 0, 1); LCD_WriteString(&lcd, "Keeper too fast.");
+          #endif
+          poweroff();
+        }
       }
 
       #ifdef SUPPORT_NUNCHUK
-        if (transpotter_counter % 500 == 0) {
-          if (nunchuk_connected == 0 && enable == 0) {
-              if(Nunchuk_Read() == NUNCHUK_CONNECTED) {
-                #ifdef SUPPORT_LCD
-                  LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Nunchuk Control");
-                #endif
-                nunchuk_connected = 1;
-	      }
-	    } else {
-              nunchuk_connected = 0;
-	    }
+        if (transpotter_counter % 500 == 0) 
+        {
+          if(Nunchuk_Read() == NUNCHUK_CONNECTED) 
+          {
+              #ifdef SUPPORT_LCD
+                LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Nunchuk Control");
+              #endif
+              nunchuk_connected = 1;
+          } 
+          else 
+          {
+            nunchuk_connected = 0;
           }
         }   
       #endif
@@ -458,6 +675,12 @@ int main(void) {
       #endif
       transpotter_counter++;
     #endif
+    
+
+        // rtP_Left.n_cruiseMotTgt   = 20;
+        // rtP_Right.n_cruiseMotTgt  = 20;
+        // rtP_Left.b_cruiseCtrlEna  = 1;
+        // rtP_Right.b_cruiseCtrlEna = 1;
 
     // ####### SIDEBOARDS HANDLING #######
     #if defined(SIDEBOARD_SERIAL_USART2)
@@ -489,20 +712,23 @@ int main(void) {
 
     // ####### DEBUG SERIAL OUT #######
     #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-      if (main_loop_counter % 25 == 0) {    // Send data periodically every 125 ms      
-        #if defined(DEBUG_SERIAL_PROTOCOL)
-          process_debug();
-        #else
-          printf("in1:%i in2:%i cmdL:%i cmdR:%i BatADC:%i BatV:%i TempADC:%i Temp:%i \r\n",
-            input1[inIdx].raw,        // 1: INPUT1
-            input2[inIdx].raw,        // 2: INPUT2
-            cmdL,                     // 3: output command: [-1000, 1000]
-            cmdR,                     // 4: output command: [-1000, 1000]
-            adc_buffer.batt1,         // 5: for battery voltage calibration
-            batVoltageCalib,          // 6: for verifying battery voltage calibration
-            board_temp_adcFilt,       // 7: for board temperature calibration
-            board_temp_deg_c);        // 8: for verifying board temperature calibration
-        #endif
+      if (main_loop_counter % 25 == 0) {    // Send data periodically every 125 ms    
+        printf("Drive mode: %d, sice: %d, loop: %d\n", isInDriveMode, notInDriveSince, main_loop_counter)  ;
+     //   #if defined(DEBUG_SERIAL_PROTOCOL)
+     //     process_debug();
+     //   #else
+          // printf("%d,%i,%i,%i,%i,%i,%i,%i,%i,%f \r\n",
+          //   main_loop_counter,
+          //   input1[inIdx].cmd,        // 1: INPUT1
+          //   input2[inIdx].cmd,        // 2: INPUT2
+          //   cmdL,                     // 3: output command: [-1000, 1000]
+          //   cmdR,                     // 4: output command: [-1000, 1000]
+          //   pwml,
+          //   pwmr,
+          //   distance,
+          //   distanceErr,
+          //   steering);
+     //   #endif
       }
     #endif
 
@@ -590,12 +816,12 @@ int main(void) {
       }
     #endif
 
-    if (inactivity_timeout_counter > (INACTIVITY_TIMEOUT * 60 * 1000) / (DELAY_IN_MAIN_LOOP + 1)) {  // rest of main loop needs maybe 1ms
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-        printf("Powering off, wheels were inactive for too long\r\n");
-      #endif
-      poweroff();
-    }
+    // if (inactivity_timeout_counter > (INACTIVITY_TIMEOUT * 60 * 1000) / (DELAY_IN_MAIN_LOOP + 1)) {  // rest of main loop needs maybe 1ms
+    //   #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
+    //     printf("Powering off, wheels were inactive for too long\r\n");
+    //   #endif
+    //   poweroff();
+    // }
 
 
     // HAL_GPIO_TogglePin(LED_PORT, LED_PIN);                 // This is to measure the main() loop duration with an oscilloscope connected to LED_PIN
